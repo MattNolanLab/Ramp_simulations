@@ -1,0 +1,1 @@
+from gym_linearnavigation.envs.linearnavigation_visual_v2 import LinearNavigationVisualV2
