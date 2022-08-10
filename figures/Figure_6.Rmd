@@ -1,0 +1,324 @@
+---
+title: "Figure6_Analysis"
+output:
+  html_document:
+    df_print: paged
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    highlight: tango
+---
+
+# Setup
+
+## Dependencies
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(scales)
+library(patchwork)
+library(cowplot)
+
+library(tidyverse)
+library(broom)
+library(lme4)
+library(ggExtra)
+library(ggthemes)
+library(scales)
+library(Hmisc)
+library(Metrics)
+library(plotrix)
+library(pheatmap) 
+library(RColorBrewer)
+library(networkD3) 
+
+```
+
+## Global configuration 
+
+```{r}
+global_text_size = 22
+custom_theme = theme_classic() + theme(text = element_text(size=global_text_size))
+theme_set(custom_theme)
+
+```
+
+# Analysis & plotting
+
+
+## Main figure
+
+### Common plot utilities
+
+The neural-activity plots and stop-raster plots share some common features (same x axis, track shading), so we define them here to avoid repetition.
+
+
+```{r}
+
+common_geom_track_shading <- list(
+  # Reward zone shading
+  geom_rect(fill = rz_colour, xmin = FIRST_BLACKBOX_END + RZ_START, xmax = FIRST_BLACKBOX_END + RZ_END, ymin = -Inf, ymax = Inf),
+  # Beginning blackbox shading
+  geom_rect(fill = blackbox_colour, xmin = 0, xmax = FIRST_BLACKBOX_END, ymin = -Inf, ymax = Inf),
+  # Ending blackbox shading
+  geom_rect(fill = blackbox_colour, xmin = SECOND_BLACKBOX_START, xmax = TRACK_LENGTH, ymin = -Inf, ymax = Inf))
+
+common_geom_track_x_axis <- list(
+  scale_x_continuous(breaks = c(0, (RZ_START + RZ_END) / 2, TRACK_LENGTH), expand = c(0, 1)),   # (expand to make move the black box close to y axis)
+  expand_limits(x = c(0, TRACK_LENGTH)))
+```
+
+
+### Subfig: Training results
+
+```{r}
+timestep_limit = 30e6
+
+p_training <- training_progress %>% 
+  ggplot(aes(timestep, reward)) +
+  geom_line() + 
+  scale_x_continuous(labels = unit_format(unit = "M", scale = 1e-6), limits = c(0, timestep_limit)) + 
+  labs(x = 'Training steps', y = 'Reward')
+
+
+p_training
+```
+
+### Subfigs: Behavioural (stop) raster plots for trained, untrained, probe
+
+```{r}
+rz_colour <- rgb(205, 227, 207, maxColorValue = 255)
+blackbox_colour <- rgb(208, 208, 208, maxColorValue = 255)
+
+n_trials_to_plot = 50
+
+
+plot_behaviour <- function(data, is_probe) {
+  data <- data %>% filter(global_trial_number <= n_trials_to_plot)
+  
+  # Hack to make all stops unrewarded for probe trials. 
+  # (In the simulations, -1 is for unnecessary stops, and 100 is for rewarded stops)
+  if (is_probe) {
+    data$reward <- -1
+  }
+  
+  data <- data %>% filter(action == 0, neuron_id == 1)
+  data %>% 
+    ggplot(aes(location, global_trial_number)) +
+    common_geom_track_shading +
+    geom_point(data=subset(data, reward == -1), aes(), alpha=0.7) +
+    # Rewarded stops
+    geom_point(data=subset(data, reward == 100), aes(), alpha=1, colour='red', shape=-9658, size=3) +
+    scale_colour_manual(values = c('black', 'red')) +
+    common_geom_track_x_axis +
+    theme(axis.title.x=element_blank(), axis.text.x=element_blank(), axis.ticks.x=element_blank()) +  # hide x axis
+    labs(x = 'Location', y = 'Trial') 
+}
+
+
+p_untrained_behaviour <- plot_behaviour(untrained_behaviour, is_probe = FALSE)
+p_trained_behaviour <- plot_behaviour(trained_behaviour, is_probe = FALSE)
+p_probe_behaviour <- plot_behaviour(probe_behaviour, is_probe = TRUE)
+
+# Plot them for rmd
+p_untrained_behaviour
+p_trained_behaviour
+p_probe_behaviour
+
+```
+
+### Subfig: neuron activations
+
+
+```{r}
+
+n_trials_to_plot <- 50
+
+plot_activations <- function(data, labels) {
+  
+  lm_results <- function (row) {
+    return("placeholder")
+  }
+  
+  data %>% 
+    group_by(neuron_id, location) %>%
+    summarise(mean_neuron_activity = mean(neuron_activity), sd_neuron_activity = sd(neuron_activity)) %>%
+    left_join(neuron_labels) %>%
+    ggplot(aes(location, mean_neuron_activity)) +
+    common_geom_track_shading +
+    geom_ribbon(aes(ymin = mean_neuron_activity - sd_neuron_activity, ymax = mean_neuron_activity + sd_neuron_activity), fill = "grey70") +
+    geom_line() +
+    common_geom_track_x_axis +
+    facet_wrap(. ~  label, ncol = 2, strip.position = 'top', scales = 'free_y') +
+    theme(strip.background = element_blank()) +
+    theme(strip.text=element_text(size = global_text_size-2, margin=margin(l = 50, b = 5, unit='pt'))) +
+    theme(axis.title.x=element_blank(), axis.text.x=element_blank(), axis.ticks.x=element_blank()) +  # Hide the x axis
+    labs(x = 'Location', y = 'Activation')  +
+    scale_y_continuous(breaks = pretty_breaks(), expand = c(0, 0), limits = c(0, NA))
+}
+
+
+p_activations <- 
+  plot_activations(trained_behaviour %>% filter(global_trial_number <= n_trials_to_plot, neuron_id %in% neuron_ids), neuron_labels)
+
+
+p_activations
+
+```
+
+### Subfigs: r^2 shuffled and real
+
+
+```{r}
+level_order <- c("Negative", "Positive", "Unclassified")
+
+p_r2_real <- ggplot(data=spatial_firing, aes(x= asr_b_o_rewarded_fit_r.squared, fill=factor(unlist(lm_group_b), level = level_order))) +
+  coord_cartesian(xlim = c(0,1)) +
+  geom_histogram(aes(y=..count../sum(..count..)), binwidth=0.01) +
+  ylab("Proportion") +
+  xlab("\nrsquared") +
+  scale_fill_manual(values=c("violetred2", "chartreuse3", "grey62")) +
+  scale_y_continuous(breaks=c(0.00, 0.06)) +
+  theme_classic() +
+  theme(legend.position = c(0.6, 0.7), legend.title = element_blank(), axis.title.x = element_blank())
+    
+
+p_r2_real 
+
+p_r2_shuffled <- ggplot(data=shuff_slopes, aes(x = r2)) +
+    coord_cartesian(xlim = c(0,1)) +
+    geom_histogram(aes(y=..count../sum(..count..)), binwidth=0.01) +
+    xlab(expression(R^2)) +
+    ylab("Proportion") +
+    scale_y_continuous(breaks=c(0.00, 0.8)) +
+    theme_classic() 
+p_r2_shuffled
+
+
+plot_grid(p_r2_real, p_r2_shuffled, ncol=1, align='v')
+```
+
+
+
+### Subfigs: slope comparison
+
+```{r}
+p_slope_comparison <- ggplot() + 
+    geom_jitter(data=continuous,aes(x = as.numeric(unlist(asr_b_o_rewarded_fit_slope)) * sr_factor_outbound, y = as.numeric(unlist(asr_b_h_rewarded_fit_slope)) * sr_factor_homebound, color=factor(unlist(lm_group_b)))) +
+    geom_jitter(data=reset,aes(x = as.numeric(unlist(asr_b_o_rewarded_fit_slope)) * sr_factor_outbound, y = as.numeric(unlist(asr_b_h_rewarded_fit_slope)) * sr_factor_homebound, color=factor(unlist(lm_group_b))), shape=1) +
+    xlab("Outbound slope") +
+    ylab("Homebound slope") +
+    theme_classic() +
+    scale_color_manual(values=c("violetred2", "chartreuse3")) +
+    theme(legend.position="none",  legend.title = element_blank())
+
+p_slope_comparison 
+```
+
+
+### Subfigs: heatmap
+
+```{r}
+wide_DF <- concat_firing_start %>% spread(Position, Rates)
+
+colnames(wide_DF) <- c("new_cluster_id", rep(TRACK_OUTBOUND_START:TRACK_OUTBOUND_END, times=1))
+rownames(wide_DF) <- paste("neuron", 1:max(start_ramps$new_cluster_id), sep="_")
+
+name <- "new_cluster_id"
+wide_DF <- wide_DF %>% select(-one_of(name))
+
+mydf <- data.frame(row.names = paste("neuron", 1:max(start_ramps$new_cluster_id), sep="_"), catagory = lm_result, region = brain_region, ramp_score=ramp_result)
+
+mydf <- data.frame(row.names = paste("neuron", 1:max(start_ramps$new_cluster_id), sep="_"), catagory = lm_result)
+
+rownames(wide_DF) <- paste("neuron", 1:max(start_ramps$new_cluster_id), sep="_")
+# change the color of annotation to what you want: (eg: "navy", "darkgreen")
+Var1        <- c("violetred2", "black", "chartreuse3")
+names(Var1) <- c("Negative", "Unclassified", "Positive")
+
+Var2        <- c("springgreen4", "deepskyblue1", "firebrick", "violetred2" )
+names(Var2) <- c('XX', "UN", "V1", "PreS")
+
+anno_col <- list(result = Var1, region = Var2, ramp_score = brewer.pal(11,"RdBu"))
+
+mydf <- mydf %>% filter(result != 'NAs')
+wide_DF <- wide_DF %>% rownames_to_column() %>%
+  filter(rowname %in% rownames(mydf)) %>%
+  select(-rowname)
+
+rownames(wide_DF) <- rownames(mydf)
+
+myheatmap<-pheatmap(wide_DF,cluster_cols = F, cluster_rows = F, annotation_row = mydf, show_rownames = F, show_colnames = F, annotation_colors=anno_col, 
+                    legend = F,  annotation_legend = F, annotation_names_row = F)
+myheatmap
+
+p_heatmap <- myheatmap
+```
+
+
+
+### Figure arrangement
+
+Note: the image from panel A (network schematic) needs to be added manually. 
+
+I have tried multiple methods of including the svg/pdf/png automatically but they all make the image look horrible...
+
+```{r, fig.height=7, fig.width=11}
+library("ggplotify")
+
+grid_layout <- "AAABB
+                AAABB
+                CFFGJ
+                DFFHJ
+                EFFIJ"
+
+# This placeholder object looks stupid but it is needed to preserve the panel label font size. 
+spacer = ggplot() + custom_theme + theme(line = element_blank())
+
+t = theme()
+
+left_head_element_size = 17
+p_untrained <- p_untrained_behaviour + labs(title = 'Non-beaconed before training') + theme(plot.title = element_text(size=left_head_element_size))
+p_trained <- p_trained_behaviour + labs(title = 'Non-beaconed after training') + theme(plot.title = element_text(size=left_head_element_size))
+p_probe <- p_probe_behaviour + labs(title = 'Probe trials') + theme(plot.title = element_text(size=left_head_element_size))
+
+custom_theme = theme(text = element_text(size=global_text_size))
+global_margin <- theme(plot.margin=unit(c(0.6, 0.6, 0.6, 0.6), units='cm'))
+p <- spacer +  
+  (p_training + global_margin) + 
+  (p_untrained + global_margin) + 
+  (p_trained + global_margin) + 
+  (p_probe + global_margin) +
+  (p_activations + global_margin) +
+  (p_r2_real + custom_theme + global_margin) +
+  (p_r2_shuffled + custom_theme + global_margin) +
+  (p_slope_comparison + custom_theme + global_margin) +
+  (as.ggplot(p_heatmap) + custom_theme + global_margin) +
+  plot_layout(design = grid_layout) + plot_annotation(tag_levels = 'A') 
+
+p
+
+
+ggsave('plots/Figure6.png', p, height = 14, width = 19)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
