@@ -1,0 +1,130 @@
+---
+title: "Figure 7"
+---
+
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+```{r}
+library(reticulate)
+
+library(patchwork)
+library(tidyverse)
+library(scales)
+library(vroom)
+library(plotly)
+library(broom)
+
+theme_set(theme_classic())
+```
+
+
+```{python}
+from pathlib import Path
+from get_rates import get_behaviour_visual
+
+
+model = Path('../results/perturbations_visual/normal.json')
+df_normal = get_behaviour_visual(model)
+
+model = Path('../results/perturbations_visual/ramp_readout_disrupted.json')
+df_ramp_readout_disrupted = get_behaviour_visual(model)
+
+model = Path('../results/perturbations_visual/nonramp_readout_disrupted.json')
+df_nonramp_readout_disrupted = get_behaviour_visual(model)
+
+model = Path('../results/perturbations_visual/ramp_recurrent_disrupted.json')
+df_ramp_recurrent_disrupted = get_behaviour_visual(model)
+
+model = Path('../results/perturbations_visual/nonramp_recurrent_disrupted.json')
+df_nonramp_recurrent_disrupted = get_behaviour_visual(model)
+
+model = Path('../results/perturbations_visual/nonramp_overriden.json')
+df_nonramp_override = get_behaviour_visual(model)
+
+model = Path('../results/perturbations_visual/ramp_overriden.json')
+df_ramp_override = get_behaviour_visual(model)
+
+model = Path('../results/perturbations_visual/nonramp_overriden_recurrent_and_readout.json')
+df_nonramp_override_recurrent_and_readout = get_behaviour_visual(model)
+
+model = Path('../results/perturbations_visual/ramp_overriden_recurrent_and_readout.json')
+df_ramp_override_recurrent_and_readout = get_behaviour_visual(model)
+
+```
+
+
+```{r}
+global_text_size = 22
+custom_theme = theme_classic() + theme(text = element_text(size=global_text_size))
+theme_set(custom_theme)
+
+rz_colour <- rgb(205, 227, 207, maxColorValue = 255)
+blackbox_colour <- rgb(208, 208, 208, maxColorValue = 255)
+
+
+common_geom_track_shading <- list(
+  # Reward zone shading
+  geom_rect(fill = rz_colour, xmin = FIRST_BLACKBOX_END + RZ_START, xmax = FIRST_BLACKBOX_END + RZ_END, ymin = -Inf, ymax = Inf),
+  # Beginning blackbox shading
+  geom_rect(fill = blackbox_colour, xmin = 0, xmax = FIRST_BLACKBOX_END, ymin = -Inf, ymax = Inf),
+  # Ending blackbox shading
+  geom_rect(fill = blackbox_colour, xmin = SECOND_BLACKBOX_START, xmax = TRACK_LENGTH, ymin = -Inf, ymax = Inf))
+
+n_trials_to_plot = 50  # Limit the number of trials plotted, otherwise the plots are super cluttered
+
+
+plot_behaviour <- function(data) {
+  data <- data %>% filter(inter_trial <= n_trials_to_plot)
+  
+  data <- data %>% filter(action == 0)
+  data %>% 
+    ggplot(aes(location, inter_trial)) +
+    common_geom_track_shading +
+    geom_point(alpha=0.7) +
+    # Rewarded stops
+    scale_colour_manual(values = c('black', 'red')) +
+    scale_x_continuous(breaks = c(0, (RZ_START + RZ_END) / 2, TRACK_LENGTH), expand = c(0, 1)) +  # (expand to make move the black box close to y axis)
+    expand_limits(x = c(0, TRACK_LENGTH)) + 
+    expand_limits(y = c(0, n_trials_to_plot)) + 
+    theme(axis.title.x=element_blank(), axis.text.x=element_blank(), axis.ticks.x=element_blank()) +  # hide x axis
+    labs(x = 'Location', y = 'Trial') 
+}
+
+
+plot_behaviour(py$df_ramp_recurrent_disrupted)
+plot_behaviour(py$df_nonramp_recurrent_disrupted)
+
+plot_behaviour(py$df_ramp_readout_disrupted)
+plot_behaviour(py$df_nonramp_readout_disrupted)
+
+plot_behaviour(py$df_nonramp_override)
+plot_behaviour(py$df_ramp_override)
+
+plot_behaviour(py$df_nonramp_override_recurrent_and_readout)
+plot_behaviour(py$df_ramp_override_recurrent_and_readout)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
